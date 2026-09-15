@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Kamera Monitoring Kunjungan</title>
+  <style>
+    * { box-sizing:border-box; font-family:Arial,sans-serif; }
+    html,body { margin:0; min-height:100%; background:#0d0d0d; color:#f4f4f4; }
+    body { padding:16px; }
+    .camera-page { width:100%; max-width:620px; margin:0 auto; }
+    .camera-title { text-align:center; font-size:19px; font-weight:700; margin:6px 0 14px; }
+    .camera-frame { position:relative; width:100%; overflow:hidden; border:1px solid #333; border-radius:12px; background:#050505; }
+    video { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; background:#050505; }
+    .face-guide { position:absolute; left:50%; top:50%; width:54%; height:70%; transform:translate(-50%,-50%); border:1px solid rgba(255,255,255,.55); border-radius:50%; pointer-events:none; }
+    .status { min-height:20px; margin:10px 0; text-align:center; color:#aaa; font-size:13px; line-height:1.4; }
+    .actions { display:flex; gap:8px; }
+    button { flex:1; height:44px; border:1px solid #444; border-radius:9px; background:#1d1d1d; color:#fff; font-size:14px; font-weight:700; cursor:pointer; }
+    .capture { background:#fff; color:#111; border-color:#fff; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    canvas { display:none; }
+  </style>
+</head>
+<body>
+  <main class="camera-page">
+    <div class="camera-title">Kamera Monitoring Kunjungan</div>
+    <div class="camera-frame">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <div class="face-guide"></div>
+    </div>
+    <div id="status" class="status">Meminta akses kamera...</div>
+    <div class="actions">
+      <button type="button" onclick="closeCameraPage()">Batal</button>
+      <button id="captureButton" class="capture" type="button" onclick="capturePhoto()" disabled>Ambil Foto</button>
+    </div>
+  </main>
+  <canvas id="captureCanvas"></canvas>
+
+<script>
+let stream = null;
+
+async function startCamera() {
+  const video = document.getElementById('cameraVideo');
+  const status = document.getElementById('status');
+  const button = document.getElementById('captureButton');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status.textContent = 'Perangkat atau browser tidak mendukung kamera.';
+    return;
+  }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+
+    video.srcObject = stream;
+    await video.play();
+    button.disabled = false;
+    status.textContent = 'Kamera aktif. Posisikan objek di dalam area kamera, lalu ambil foto.';
+  } catch (error) {
+    console.error(error);
+    status.textContent = 'Akses kamera ditolak atau tidak tersedia. Izinkan kamera pada browser.';
+  }
+}
+
+async function capturePhoto() {
+  const video = document.getElementById('cameraVideo');
+  const canvas = document.getElementById('captureCanvas');
+  const status = document.getElementById('status');
+
+  if (!video.videoWidth || !video.videoHeight) {
+    status.textContent = 'Kamera belum siap.';
+    return;
+  }
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d', { alpha:false });
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const dataUrl = await compressCanvas(canvas);
+
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage({
+      type: 'monitoringKunjunganPhoto',
+      photoDataUrl: dataUrl
+    }, '*');
+    stopCamera();
+    window.close();
+  } else {
+    status.textContent = 'Halaman utama tidak ditemukan. Buka kamera dari tombol Kamera Langsung pada Monitoring Kunjungan.';
+  }
+}
+
+function compressCanvas(sourceCanvas) {
+  return new Promise((resolve, reject) => {
+    let width = sourceCanvas.width;
+    let height = sourceCanvas.height;
+    const maxDimension = 1600;
+
+    if (Math.max(width, height) > maxDimension) {
+      const ratio = maxDimension / Math.max(width, height);
+      width = Math.round(width * ratio);
+      height = Math.round(height * ratio);
+    }
+
+    const work = document.createElement('canvas');
+    work.width = width;
+    work.height = height;
+    const ctx = work.getContext('2d', { alpha:false });
+    ctx.drawImage(sourceCanvas, 0, 0, width, height);
+
+    let quality = 0.86;
+    const makeBlob = () => work.toBlob(blob => {
+      if (!blob) { reject(new Error('Foto gagal diproses.')); return; }
+      if (blob.size <= 4.8 * 1024 * 1024 || quality <= 0.35) {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+        return;
+      }
+      quality -= 0.06;
+      makeBlob();
+    }, 'image/jpeg', quality);
+
+    makeBlob();
+  });
+}
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+}
+
+function closeCameraPage() {
+  stopCamera();
+  window.close();
+}
+
+window.addEventListener('beforeunload', stopCamera);
+startCamera();
+</script>
+</body>
+</html>
